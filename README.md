@@ -25,10 +25,12 @@ NodeX is a messaging app built on a simple principle: **no central server owns y
 - **Your identity is created on your device.** It's a cryptographic key pair, with a human-friendly handle like **`Rahul#7K3M9X`**.
 - **Your private key never leaves your device.** A 12-word recovery phrase is the only way to restore it, and that phrase is never stored anywhere.
 - **Logging in and recovering your account happen entirely on your device**, with zero network requests.
-- **Contacts and your profile photo are stored on your device**, not on a server.
+- **Finding people is peer-to-peer.** Your handle is published, signed with your key, into a distributed hash table (DHT) shared by the network's peers. Searches go to the DHT, and every result is verified on your device.
+- **Chat is direct and end-to-end encrypted.** Messages travel straight from your browser to your friend's browser over WebRTC. No server stores or forwards them.
+- **Contacts, messages and your profile photo are stored on your device**, not on a server.
 - **The only server** is a tiny, stateless email verifier used once during sign-up to confirm your email with a one-time code. It has no database and stores no users.
 
-> **Project status:** the decentralized identity system is complete. The peer-to-peer network (finding people by handle, chat, sharing profile photos) is the next milestone. See the [Roadmap](#roadmap).
+> **Project status:** decentralized identity, P2P contact search and real-time P2P chat are complete. Peer-to-peer profile photos and group chats are next. See the [Roadmap](#roadmap).
 
 ---
 
@@ -45,8 +47,12 @@ NodeX is a messaging app built on a simple principle: **no central server owns y
 | ✅ | **Secure key storage** | The private key is encrypted with a non-exportable browser key |
 | ✅ | **Profile photo** | Cropped and resized on your device, and stored locally |
 | ✅ | **Chat-style interface** | Dark, WhatsApp-inspired home, profile and logout screens |
-| 🔜 | **Find people by handle** | Over the P2P network (DHT) |
-| 🔜 | **End-to-end encrypted chat** | Direct peer-to-peer messaging |
+| ✅ | **Find people by handle (P2P)** | Signed handle records in a libp2p DHT, verified on your device |
+| ✅ | **Local contacts** | Add people you find; saved only on your device |
+| ✅ | **Real-time P2P chat** | One-to-one messages, browser to browser over WebRTC, end-to-end encrypted |
+| ✅ | **Ticks and read receipts** | 🕓 waiting · ✓ delivered (recipient's device confirmed) · ✓✓ read (recipient opened the chat); unread counts in the chat list |
+| ✅ | **Disappearing messages** | Each message is deleted from both devices 48 hours after it's read; unread messages are kept |
+| ✅ | **Offline queue** | Messages to an offline friend wait on your device and are delivered automatically when they're back online |
 
 ---
 
@@ -68,6 +74,52 @@ handle  =  DisplayName # TAG          →   Rahul#7K3M9X
 - **The tag is tied to your key and email**, so another person can't produce your handle without brute-forcing a deliberately slow hash.
 - **The tag uses unambiguous characters** (`0-9 A-Z` without `I L O U`). When you type a tag, `I`/`L` are read as `1` and `O` as `0`.
 - **The display name is used only to create the handle.** It's never stored or shown on its own.
+
+### Finding people (P2P contact search)
+
+```
+You (browser) ──publish signed record──►  NodeX DHT  ◄──lookup "rahul#7k3m9x"── Someone else (browser)
+                                          (held by network peers,
+                                           in memory, no accounts)
+```
+
+1. **Publish:** when you're online, your browser joins the network and publishes a **handle record** to the DHT, then republishes it every 6 hours while the app is open:
+   ```
+   key   = /nodex/rahul#7k3m9x                (canonical lowercase handle)
+   value = { handle, peer_id, email_commitment, seq, sig }
+   ```
+   The record is **signed with your private key**.
+2. **Search:** type a full handle in any capitalisation, such as `rahul#7k3m9x`. Your browser asks the DHT for that key.
+3. **Verify on your device:** a result is shown only if all of these hold:
+   - the signature matches the key inside its Peer ID
+   - it's stored under its own handle
+   - the handle's tag re-derives from that Peer ID
+4. **Add:** the contact (handle + Peer ID) is saved on your device.
+
+**Why nobody can take over your handle:** every network node runs the same check before storing a record, so a record for `Rahul#7K3M9X` signed by any other key is rejected. Search sends **no HTTP requests**; it only talks to network peers over libp2p.
+
+> Search is by **exact handle**: a DHT can't do partial ("starts with") search. Share your full handle so people can find you.
+
+### Chat (real-time, peer to peer)
+
+```
+Asha's browser ──WebRTC (direct, encrypted)──► Bob's browser
+        │                                         │
+        └──── handshake only, via a NodeX node ───┘
+```
+
+1. **Connecting:** when you open a chat, your browser connects to your friend's browser. The NodeX node relays only the short WebRTC handshake, because browsers can't receive incoming connections on their own. After that the connection is **direct**. If a direct path can't be found, the relay is used instead, still end-to-end encrypted.
+2. **Sending:** each message goes over that connection using the `/nodex/chat/1.0.0` protocol, and your friend's device sends back an acknowledgement. Then the 🕓 turns into ✓.
+3. **Who sent it:** libp2p connections are authenticated with the sender's key, so the sender's Peer ID is proven. Their handle is checked against your contacts or the DHT. A stranger who claims to be someone else is rejected.
+4. **Storage:** messages are kept only on the two devices (IndexedDB). People who message you appear in your chat list automatically.
+5. **If your friend is offline:** the message waits on **your** device (🕓) and is delivered automatically when they're next online while your app is open. The app retries every 15 seconds and whenever they connect.
+6. **Read receipts (✓✓):** when your friend opens the chat, their device sends a small `{ t: "read", ids }` receipt back to yours over the same direct connection. A receipt is only accepted from the person the messages were sent to. If you're offline at that moment, the receipt waits on their device, like messages do.
+7. **Disappearing messages:**
+   - The 48-hour timer starts when a message is read. For the reader that's when they open the chat; for the sender it's when the read receipt arrives.
+   - After 48 hours, each device deletes its own copy. The app checks when it opens and every minute.
+   - Unread messages are never deleted.
+
+> **Both people need the app open at the same time** for a message to move. There's no server to hold messages for offline users.
 
 ### Sign up
 
@@ -105,8 +157,12 @@ Logging out removes your identity from the device. To come back you'll need your
 | Display name | Only as part of your handle | ❌ Never |
 | Handle, Peer ID, public key | Your device | ❌ No |
 | Email | Nowhere on your device; the verifier sees it only to send the code | Only during sign-up, never stored |
+| Handle record (handle, Peer ID, email commitment, signature) | The P2P network's DHT, so others can find you | Public by design; never on a server |
 | Contacts | Your device | ❌ Never |
+| Chat messages | Your device and your friend's device | ❌ Never (sent directly between the two browsers, encrypted) |
 | Profile photo | Your device | ❌ Never |
+
+> The email commitment in your public handle record is a **slow, salted hash** of your email, not the email itself. It's needed so anyone can check your handle belongs to your key. Someone who already suspects your exact email could test that guess (slowly), so treat your handle as linked to your email.
 
 ---
 
@@ -117,16 +173,22 @@ Logging out removes your identity from the device. To come back you'll need your
 │  Next.js app (React + TypeScript)                                      │
 │   • identity generation, login, recovery  (lib/identity.ts)            │
 │   • encrypted key vault, contacts, photo   (IndexedDB)                 │
-└───────────────────────┬──────────────────────────────────────────────┘
-                        │  sign-up only: send code / check code
-                        ▼
-┌──────────── Email verifier (Go) ────────────┐
-│  • no database, stores no users              │
-│  • codes travel inside HMAC-signed tokens    │
-│  • rate limits + 5 attempts per code         │
-│  • sends email via SMTP (e.g. Gmail)         │
-└──────────────────────────────────────────────┘
+│   • js-libp2p node: publish + look up handle records (lib/p2p/)        │
+│   • chat: WebRTC straight to other browsers (lib/p2p/chat.ts)          │
+└──────────┬──────────────────────────────────────────┬────────────────┘
+           │ sign-up only: send / check code          │ libp2p (WebSockets, Noise, Yamux)
+           ▼                                          ▼
+┌──── Email verifier (Go) ────┐      ┌──────── NodeX P2P nodes (Go) ────────┐
+│ • no database, no users      │      │ • DHT /nodex/kad/1.0.0 (server mode) │
+│ • HMAC-signed code tokens    │      │ • holds signed handle records, in    │
+│ • rate limits, 5 attempts    │      │   memory; validates every record     │
+│ • SMTP (e.g. Gmail)          │      │ • circuit relay for browsers         │
+└──────────────────────────────┘      │ • no database, no accounts; anyone   │
+                                      │   can run one, link with NODE_PEERS  │
+                                      └──────────────────────────────────────┘
 ```
+
+**Why the network needs nodes like `NodeX-node`:** browsers can't accept incoming connections, so they can't hold a DHT by themselves. They join the network by dialling always-on libp2p peers. These peers hold only public, signed handle records, validate every record before storing it, and have no accounts or database. This is the same role bootstrap and DHT-server nodes play in IPFS. Any number of independently run nodes can form the network.
 
 ### Tech stack
 
@@ -136,7 +198,8 @@ Logging out removes your identity from the device. To come back you'll need your
 | Cryptography | `@libp2p/crypto`, `@libp2p/peer-id` (Ed25519, Peer IDs), `@scure/bip39` (recovery phrase), Web Crypto API (PBKDF2, AES-GCM) |
 | Local storage | IndexedDB |
 | Email verifier | Go 1.27, standard library `net/smtp` |
-| P2P network (next) | libp2p, DHT, WebRTC / WebTransport |
+| P2P (browser) | `libp2p` (js), `@libp2p/kad-dht`, `@libp2p/websockets`, `@libp2p/webrtc`, `@libp2p/circuit-relay-v2`, Noise, Yamux |
+| P2P (node) | `go-libp2p`, `go-libp2p-kad-dht` |
 
 ---
 
@@ -166,9 +229,25 @@ It listens on **http://localhost:8080**.
 
 > **No email setup needed for local testing.** If `SMTP_HOST` is empty, the 6-digit codes are printed in the verifier's terminal instead of being emailed.
 
-### 3. Start the app
+### 3. Start a NodeX P2P node
 
 In a second terminal:
+
+```bash
+cd NodeX-node
+go run .
+```
+
+- **First run:** the node creates `node.key`, its identity, which keeps its address the same across restarts. Keep the file private; it's git-ignored.
+- **Address:** it prints the address browsers need, for example:
+
+```
+browsers (local dev): NEXT_PUBLIC_BOOTSTRAP_PEERS=/ip4/127.0.0.1/tcp/4002/ws/p2p/12D3KooW…
+```
+
+### 4. Start the app
+
+In a third terminal, create `NodeX-frontend/.env.local` from [.env.example](NodeX-frontend/.env.example), paste the node address into it, then:
 
 ```bash
 cd NodeX-frontend
@@ -176,7 +255,7 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:3000** and create your identity.
+Open **http://localhost:3000** and create your identity. The home screen shows *Online · discoverable on the NodeX network* once your handle is published. To try search, register a second identity in another browser profile and look it up by its handle.
 
 ### Sending real emails (optional)
 
@@ -214,6 +293,19 @@ Restart the verifier. **Never commit `.env`**; it's already listed in `.gitignor
 | Variable | Default | Description |
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8080` | Address of the email verifier |
+| `NEXT_PUBLIC_BOOTSTRAP_PEERS` | – | NodeX P2P node addresses to join the network through (comma-separated multiaddrs) |
+| `NEXT_PUBLIC_STUN_SERVERS` | – | Optional STUN servers (e.g. `stun:stun.l.google.com:19302`) that help browsers on different home networks find a direct path. STUN only tells a browser its public address and never sees messages. Not needed on one machine or network. |
+
+**P2P node** (`NodeX-node`, environment variables):
+
+| Variable | Default | Description |
+|---|---|---|
+| `NODE_LISTEN` | `/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/tcp/4002/ws` | Listen addresses (TCP for nodes, WebSockets for browsers) |
+| `NODE_KEY_FILE` | `node.key` | Where the node's identity is kept (created on first run) |
+| `NODE_KEY` | – | Node identity as 64 hex characters (overrides the key file) |
+| `NODE_PEERS` | – | Other NodeX nodes to link with (comma-separated multiaddrs) |
+
+> **Production:** browsers on an `https://` site can only use **secure** WebSockets. Put the node's WebSocket port behind TLS (for example a reverse proxy serving `wss://`) and list its `/dns4/…/tcp/443/wss/p2p/…` address in `NEXT_PUBLIC_BOOTSTRAP_PEERS`.
 
 ---
 
@@ -246,13 +338,21 @@ NodeX/
 │       ├── httpx/                 JSON helpers, CORS, rate limiting
 │       └── config/                Settings and .env loading
 │
+├── NodeX-node/                    Go libp2p P2P node (DHT server + relay)
+│   ├── main.go                    Host, WebSockets/TCP, DHT, relay, node key
+│   └── record.go                  Handle-record validation (signature + handle binding)
+│
 └── NodeX-frontend/                Next.js app
     ├── app/                       Pages: /, /register, /login, /home
     ├── components/
     │   ├── register/              Email → code → name → phrase → identity
     │   ├── login/                 Log in / recover
-    │   └── home/                  Contacts, profile, menu, logout
+    │   └── home/                  Chat list, chat screen, P2P search, profile, menu
     └── lib/
+        ├── p2p/node.ts            Browser libp2p node: join, publish, look up, WebRTC
+        ├── p2p/chat.ts            P2P chat protocol: send, receive, acks, offline queue
+        ├── messages.ts            Local message storage (IndexedDB)
+        ├── p2p/record.ts          Create/validate handle records (mirrors record.go)
         ├── identity.ts            Keys, recovery phrase, handle derivation
         ├── handle.ts              Handle parsing, case-insensitive comparison
         ├── keystore.ts            Encrypted identity vault (IndexedDB)
@@ -267,11 +367,22 @@ NodeX/
 ## Testing
 
 ```bash
-cd NodeX-backend
-go test ./...
+cd NodeX-backend && go test ./...
+cd ../NodeX-node && go test ./...
 ```
 
-The backend tests cover code sending and checking, single use, the 5-attempt lockout, expiry, the resend cooldown and tamper-proof tokens. The full flow (sign-up, handle format, recovery, case-insensitive login, logout, and checking that no secrets or extra requests leave the device) was also tested end to end in a real browser.
+- **Email verifier tests:** code sending and checking, single use, the 5-attempt lockout, expiry, the resend cooldown and tamper-proof tokens.
+- **P2P node tests:** valid records, case-insensitive keys, and rejecting forgeries. Rejected cases include a handle claimed by another key, a swapped Peer ID, a wrong key, a future-dated record, garbage and oversized values. "Newest record wins" is also tested.
+- **End-to-end tests in a real browser:**
+  - **Identity:** sign-up, handle format, recovery, case-insensitive login, logout, and checking that no secrets or extra requests leave the device.
+  - **P2P search:** two users publish, then find and add each other (handle typed in lowercase), with no HTTP requests during search. An attacker's forged record for someone else's handle is rejected by the node, and lookups still return the real user.
+  - **P2P chat:**
+    - Two browsers chat both ways in real time over a confirmed direct WebRTC connection.
+    - ✓ appears once the recipient's device confirms; unread badges and previews update live.
+    - 5 rapid messages arrive in order.
+    - A message to an offline friend is queued and delivered automatically when they return.
+    - History survives a reload, and chatting makes zero HTTP requests.
+    - A stranger who claims to be someone else is rejected.
 
 ---
 
@@ -280,6 +391,11 @@ The backend tests cover code sending and checking, single use, the 5-attempt loc
 - **Keep your 12 words safe.** Anyone who has them, plus your email and handle, can restore your identity. If you lose them and your device, the identity can't be recovered, by design, because nobody else ever had your key.
 - **No password.** Anyone with access to your unlocked browser profile is logged in, as with most messaging web apps.
 - **Handle tags are 6 characters.** The tag calculation is deliberately slow, but a very determined attacker with significant computing power could, in principle, create a different key with a matching handle. Contacts you've already added are tied to the real Peer ID. Longer tags are planned as an option.
+- **Being discoverable needs you online now and then.** Network nodes keep handle records in memory for up to 48 hours. Your app republishes yours when you open NodeX and every 6 hours while it's open. If you've been offline for a long time, or all nodes restarted, people can find you again as soon as you next open the app.
+- **Disappearing messages rely on each device's NodeX app.** In a decentralized app nobody can force-delete data on someone else's device: each NodeX app deletes its own copy after 48 hours, but a modified app, a screenshot or a copy-paste can keep a message. The same is true of disappearing messages in any messenger.
+- **Chat needs both people online.** Without a server, nothing can hold a message for someone who's offline. Messages wait on the sender's device until both are online together.
+- **Across different home networks, browsers may need STUN** (`NEXT_PUBLIC_STUN_SERVERS`) to find a direct path. If none is found, chat still works through a NodeX node's relay (encrypted end to end), but relayed connections are time- and size-limited, so the app reconnects as needed.
+- **Running more nodes makes the network more resilient.** With a single node, search depends on that node being up. Independently run nodes linked with `NODE_PEERS` share the DHT.
 
 ---
 
@@ -291,11 +407,14 @@ The backend tests cover code sending and checking, single use, the 5-attempt loc
 - [x] Passwordless local login and logout
 - [x] Case-insensitive handles
 - [x] Local contacts and profile photo
-- [ ] libp2p node in the browser, plus relay/bootstrap node
-- [ ] Find people by handle over the DHT
+- [x] libp2p node in the browser, plus P2P node (DHT server + relay)
+- [x] Find people by handle over the DHT, verified on device
 - [ ] Share profile photos peer to peer
-- [ ] End-to-end encrypted one-to-one chat
-- [ ] Offline message delivery
+- [x] Real-time, end-to-end encrypted one-to-one chat (direct WebRTC)
+- [x] Delivery acknowledgements, unread badges, on-device offline queue
+- [ ] Group chats
+- [x] Read receipts (✓✓) and disappearing messages (48 h after reading)
+- [ ] Typing indicators
 - [ ] Link a new device by QR code
 
 ---
