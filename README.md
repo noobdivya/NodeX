@@ -45,7 +45,7 @@ NodeX is a messaging app built on a simple principle: **no central server owns y
 | ✅ | **Passwordless local login** | Email + handle + recovery phrase, checked on your device |
 | ✅ | **Case-insensitive handles** | `Rahul#7K3M9X` = `rahul#7k3m9x` = `RAHUL#7K3M9X` |
 | ✅ | **Secure key storage** | The private key is encrypted with a non-exportable browser key |
-| ✅ | **Profile photo** | Cropped and resized on your device, and stored locally |
+| ✅ | **Profile photo (shared P2P)** | Cropped and resized on your device; others get it directly from your device when they find or chat with you, and changes are pushed live |
 | ✅ | **Chat-style interface** | Dark, WhatsApp-inspired home, profile and logout screens |
 | ✅ | **Find people by handle (P2P)** | Signed handle records in a libp2p DHT, verified on your device |
 | ✅ | **Local contacts** | Add people you find; saved only on your device |
@@ -121,6 +121,17 @@ Asha's browser ──WebRTC (direct, encrypted)──► Bob's browser
 
 > **Both people need the app open at the same time** for a message to move. There's no server to hold messages for offline users.
 
+### Profile photos (peer to peer)
+
+- **Your photo stays on your device.** When someone finds you in search, opens a chat with you, or connects to you as a contact, their app asks yours for it over `/nodex/profile/1.0.0`. They only download it again if it has changed (compared by SHA-256).
+- **Changes reach people straight away:** when you change or remove your photo, it's pushed to everyone currently connected. Others get the update the next time they connect.
+- **Checks on every photo received:**
+  - only WebP, JPEG or PNG, up to 256 KB
+  - the file contents must really be that image type
+  - the SHA-256 hash must match
+  - unasked-for photo pushes are accepted only from contacts
+- **Who can see it:** anyone who finds you can see your photo, like WhatsApp's "Everyone" setting.
+
 ### Sign up
 
 ```
@@ -160,7 +171,7 @@ Logging out removes your identity from the device. To come back you'll need your
 | Handle record (handle, Peer ID, email commitment, signature) | The P2P network's DHT, so others can find you | Public by design; never on a server |
 | Contacts | Your device | ❌ Never |
 | Chat messages | Your device and your friend's device | ❌ Never (sent directly between the two browsers, encrypted) |
-| Profile photo | Your device | ❌ Never |
+| Profile photo | Your device, plus copies on the devices of people who found or chatted with you | ❌ Never (sent directly device to device) |
 
 > The email commitment in your public handle record is a **slow, salted hash** of your email, not the email itself. It's needed so anyone can check your handle belongs to your key. Someone who already suspects your exact email could test that guess (slowly), so treat your handle as linked to your email.
 
@@ -409,7 +420,7 @@ cd ../NodeX-node && go test ./...
 - [x] Local contacts and profile photo
 - [x] libp2p node in the browser, plus P2P node (DHT server + relay)
 - [x] Find people by handle over the DHT, verified on device
-- [ ] Share profile photos peer to peer
+- [x] Share profile photos peer to peer
 - [x] Real-time, end-to-end encrypted one-to-one chat (direct WebRTC)
 - [x] Delivery acknowledgements, unread badges, on-device offline queue
 - [ ] Group chats
