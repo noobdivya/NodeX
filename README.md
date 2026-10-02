@@ -50,6 +50,11 @@ NodeX is a messaging app built on a simple principle: **no central server owns y
 | ✅ | **Find people by handle (P2P)** | Signed handle records in a libp2p DHT, verified on your device |
 | ✅ | **Local contacts** | Add people you find; saved only on your device |
 | ✅ | **Real-time P2P chat** | One-to-one messages, browser to browser over WebRTC, end-to-end encrypted |
+| ✅ | **Photo messages** | Attach or paste a photo; resized and compressed on your device, sent directly to your friend's device, with optional caption and full-screen viewer |
+| ✅ | **Videos and documents** | Send any file up to 50 MB straight from your device to your friend's; videos play in the chat, documents are saved to the device; progress bar, cancel and resume |
+| ✅ | **Reply, forward, delete** | Reply to a message with a quote; forward text, photos and files to another chat; delete for yourself, or delete your own message for everyone |
+| ✅ | **Last seen** | Shows "online" or "last seen today at 11:05", recorded by your own device from its direct connections |
+| ✅ | **Emoji picker** | Built-in picker (no external service); emoji-only messages are shown large |
 | ✅ | **Ticks and read receipts** | 🕓 waiting · ✓ delivered (recipient's device confirmed) · ✓✓ read (recipient opened the chat); unread counts in the chat list |
 | ✅ | **Disappearing messages** | Each message is deleted from both devices 48 hours after it's read; unread messages are kept |
 | ✅ | **Offline queue** | Messages to an offline friend wait on your device and are delivered automatically when they're back online |
@@ -119,7 +124,29 @@ Asha's browser ──WebRTC (direct, encrypted)──► Bob's browser
    - After 48 hours, each device deletes its own copy. The app checks when it opens and every minute.
    - Unread messages are never deleted.
 
-> **Both people need the app open at the same time** for a message to move. There's no server to hold messages for offline users.
+8. **Photo messages:**
+   - **Preparation:** a photo is resized on your device to at most 1600 px and compressed (WebP, or JPEG where WebP isn't available) to under 1 MB.
+   - **Sending:** the message header carries `image: { type, size, hash, w, h }`, and the bytes follow on the same stream in 60 KB chunks.
+   - **Receiving:** the receiver checks the type (WebP/JPEG/PNG), size, magic bytes and SHA-256 before saving and acknowledging.
+   - **Storage and rules:** photos are stored with the message on the two devices, and get the same ticks, offline queue and 48-hour disappearing rule as text.
+
+9. **Videos and documents (up to 50 MB):**
+   - **Sending:** the message carries only a small description, `file: { name, type, size, hash }`. The file itself stays on your device.
+   - **Downloading:** your friend's app asks your device for the bytes over `/nodex/file/1.0.0` and receives them in 60 KB chunks. Files up to 5 MB download automatically; larger ones wait for a tap on **Download**.
+   - **Progress, cancel and resume:** a progress bar shows how far it's got. If the download is cancelled or the connection drops, it continues from where it stopped instead of starting again.
+   - **Checks:** the finished file must match the promised size and SHA-256, otherwise it's thrown away. Your device hands a file only to the person the message was sent to; anyone else is refused.
+   - **Safety:** MP4/WebM/Ogg videos play in the chat. Documents are never opened inside NodeX, only saved to the device, with a reminder to open files only from people you trust.
+   - **Same rules as text:** ticks, read receipts and the 48-hour disappearing rule apply, and the file is deleted along with its message.
+
+10. **Reply:** the message carries `reply: { id, mine, preview }`, pointing at the earlier message and holding a short copy of it (up to 120 characters). Message ids are the same on both devices, so tapping the quote jumps to the original.
+11. **Forward:** your device sends a copy of the message (text, photo or file) to the other chat as a new message marked `fwd`. Nothing is fetched from anywhere; a file can be forwarded once it has been downloaded to your device.
+12. **Delete:**
+    - **Delete for me** removes the message from your device only.
+    - **Delete for everyone** (your own messages) replaces it on your device with "You deleted this message" and sends `{ t: "del", ids }` directly to the other device, which removes the content and shows "This message was deleted". If they're offline, the deletion waits on your device and is sent when they return.
+    - A device accepts a deletion only for messages written by the person asking, so nobody can delete someone else's messages.
+13. **Last seen:** your device notes the time whenever it is connected to a contact, and shows it when they're no longer connected. It is stored only on your device; no server tracks who is online.
+
+> **Both people need the app open at the same time** for a message to move. A video or document can only be downloaded while the sender is online. There's no server to hold messages for offline users.
 
 ### Profile photos (peer to peer)
 
@@ -362,6 +389,7 @@ NodeX/
     └── lib/
         ├── p2p/node.ts            Browser libp2p node: join, publish, look up, WebRTC
         ├── p2p/chat.ts            P2P chat protocol: send, receive, acks, offline queue
+        ├── p2p/file-transfer.ts   P2P video/document transfer: chunks, resume, verification
         ├── messages.ts            Local message storage (IndexedDB)
         ├── p2p/record.ts          Create/validate handle records (mirrors record.go)
         ├── identity.ts            Keys, recovery phrase, handle derivation
@@ -394,6 +422,8 @@ cd ../NodeX-node && go test ./...
     - A message to an offline friend is queued and delivered automatically when they return.
     - History survives a reload, and chatting makes zero HTTP requests.
     - A stranger who claims to be someone else is rejected.
+  - **Videos and documents:** a 200 KB document downloads automatically and arrives byte-for-byte identical; a video plays in the chat; a 20 MB file waits for a tap, shows progress, and completes identical after cancel and resume; a file over 50 MB is refused; a stranger asking for someone else's file is refused; zero HTTP requests.
+  - **Reply, forward, delete, last seen (three browsers):** quotes show the right author and jump to the original; forwarded text and a forwarded document reach a third person (document byte-for-byte identical); delete for me keeps the other person's copy; delete for everyone removes the text from both devices, also when the other person was offline at the time; last seen appears when they disconnect and is remembered; zero HTTP requests.
 
 ---
 
@@ -404,6 +434,8 @@ cd ../NodeX-node && go test ./...
 - **Handle tags are 6 characters.** The tag calculation is deliberately slow, but a very determined attacker with significant computing power could, in principle, create a different key with a matching handle. Contacts you've already added are tied to the real Peer ID. Longer tags are planned as an option.
 - **Being discoverable needs you online now and then.** Network nodes keep handle records in memory for up to 48 hours. Your app republishes yours when you open NodeX and every 6 hours while it's open. If you've been offline for a long time, or all nodes restarted, people can find you again as soon as you next open the app.
 - **Disappearing messages rely on each device's NodeX app.** In a decentralized app nobody can force-delete data on someone else's device: each NodeX app deletes its own copy after 48 hours, but a modified app, a screenshot or a copy-paste can keep a message. The same is true of disappearing messages in any messenger.
+- **"Delete for everyone" relies on the other device's NodeX app too**, for the same reason. A reply's quote keeps its short copy of the original even if the original is later deleted.
+- **"Last seen" is what your own device observed:** the last time it was connected to that person. They may have been online since then without connecting to you.
 - **Chat needs both people online.** Without a server, nothing can hold a message for someone who's offline. Messages wait on the sender's device until both are online together.
 - **Across different home networks, browsers may need STUN** (`NEXT_PUBLIC_STUN_SERVERS`) to find a direct path. If none is found, chat still works through a NodeX node's relay (encrypted end to end), but relayed connections are time- and size-limited, so the app reconnects as needed.
 - **Running more nodes makes the network more resilient.** With a single node, search depends on that node being up. Independently run nodes linked with `NODE_PEERS` share the DHT.
@@ -423,6 +455,9 @@ cd ../NodeX-node && go test ./...
 - [x] Share profile photos peer to peer
 - [x] Real-time, end-to-end encrypted one-to-one chat (direct WebRTC)
 - [x] Delivery acknowledgements, unread badges, on-device offline queue
+- [x] Emoji picker and photo messages
+- [x] Video and document messages (up to 50 MB, with resume)
+- [x] Reply, forward, delete for me / for everyone, last seen
 - [ ] Group chats
 - [x] Read receipts (✓✓) and disappearing messages (48 h after reading)
 - [ ] Typing indicators
