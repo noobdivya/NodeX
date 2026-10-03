@@ -343,6 +343,7 @@ Restart the verifier. **Never commit `.env`**; it's already listed in `.gitignor
 | `OTP_SECRET` | random per run | HMAC key for code tokens, at least 32 characters. **Required in production.** |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` | – | Email sending. **Required in production.** |
 | `APP_ENV` | `development` | Set to `production` to enforce the required settings |
+| `TRUST_PROXY` | – | `true` behind a hosting proxy (e.g. Render), so the rate limit uses each visitor's address from `X-Forwarded-For` |
 
 **Frontend** (`NodeX-frontend/.env.local`):
 
@@ -356,12 +357,29 @@ Restart the verifier. **Never commit `.env`**; it's already listed in `.gitignor
 
 | Variable | Default | Description |
 |---|---|---|
-| `NODE_LISTEN` | `/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/tcp/4002/ws` | Listen addresses (TCP for nodes, WebSockets for browsers) |
+| `NODE_LISTEN` | `/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/tcp/4002/ws`, or `/ip4/0.0.0.0/tcp/$PORT/ws` when `PORT` is set | Listen addresses (TCP for nodes, WebSockets for browsers) |
+| `NODE_ANNOUNCE` | `/dns4/$RENDER_EXTERNAL_HOSTNAME/tcp/443/wss` on Render | Public address(es) to advertise when behind a proxy |
 | `NODE_KEY_FILE` | `node.key` | Where the node's identity is kept (created on first run) |
-| `NODE_KEY` | – | Node identity as 64 hex characters (overrides the key file) |
+| `NODE_KEY` | – | Node identity: 64 hex characters, or any random secret of 32+ characters (overrides the key file) |
 | `NODE_PEERS` | – | Other NodeX nodes to link with (comma-separated multiaddrs) |
 
-> **Production:** browsers on an `https://` site can only use **secure** WebSockets. Put the node's WebSocket port behind TLS (for example a reverse proxy serving `wss://`) and list its `/dns4/…/tcp/443/wss/p2p/…` address in `NEXT_PUBLIC_BOOTSTRAP_PEERS`.
+> **Production:** browsers on an `https://` site can only use **secure** WebSockets. Put the node's WebSocket port behind TLS (Render does this for you) and list its `/dns4/…/tcp/443/wss/p2p/…` address in `NEXT_PUBLIC_BOOTSTRAP_PEERS`.
+
+### Deploying (Render + Vercel)
+
+`render.yaml` describes the two Go services; the frontend goes on Vercel.
+
+1. **Render → New → Blueprint**, pick this repository. It creates `nodex-node` and `nodex-verifier`, and asks for `SMTP_USERNAME`, `SMTP_PASSWORD` (a Gmail App Password), `SMTP_FROM` and `CORS_ORIGINS` (leave a placeholder for now).
+2. Open **nodex-node → Logs** and copy the value after `browsers: NEXT_PUBLIC_BOOTSTRAP_PEERS=`.
+3. **Vercel → Add New → Project**, import the repository, set **Root Directory** to `NodeX-frontend`, and add:
+   - `NEXT_PUBLIC_BOOTSTRAP_PEERS` = the value from step 2
+   - `NEXT_PUBLIC_API_URL` = the verifier's address, e.g. `https://nodex-verifier.onrender.com`
+4. In Render, set the verifier's `CORS_ORIGINS` to your Vercel address, e.g. `https://nodex.vercel.app`.
+
+Notes:
+- **Render's free plan sleeps a service after about 15 minutes without traffic.** For the P2P node that means a slow first visit, and the handle directory (kept in memory) is empty until people open the app again. A paid instance keeps it always on.
+- **Email on Render's free plan:** if sign-up codes don't arrive and the verifier's logs show a connection timeout to the SMTP server, the free plan is blocking outgoing email ports; move the verifier to a paid instance.
+- **Different networks:** without `NEXT_PUBLIC_STUN_SERVERS`, browsers on different networks usually chat through the node's relay (still end-to-end encrypted, but slower and size-limited).
 
 ---
 
