@@ -30,7 +30,7 @@ NodeX is a messaging app built on a simple principle: **no central server owns y
 - **Contacts, messages and your profile photo are stored on your device**, not on a server.
 - **The only server** is a tiny, stateless email verifier used once during sign-up to confirm your email with a one-time code. It has no database and stores no users.
 
-> **Project status:** decentralized identity, P2P contact search and real-time P2P chat are complete. Peer-to-peer profile photos and group chats are next. See the [Roadmap](#roadmap).
+> **Project status:** identity, P2P contact search, and real-time chat with media are complete. Group chats are next. See the [Roadmap](#roadmap).
 
 ---
 
@@ -54,6 +54,11 @@ NodeX is a messaging app built on a simple principle: **no central server owns y
 | ✅ | **Videos and documents** | Send any file up to 50 MB straight from your device to your friend's; videos play in the chat, documents are saved to the device; progress bar, cancel and resume |
 | ✅ | **Reply, forward, delete** | Reply to a message with a quote; forward text, photos and files to another chat; delete for yourself, or delete your own message for everyone |
 | ✅ | **Last seen** | Shows "online" or "last seen today at 11:05", recorded by your own device from its direct connections |
+| ✅ | **Typing indicator** | "typing…" while the other person writes, sent only over an open direct connection and never stored |
+| ✅ | **Edit messages** | Change the text or caption of your own messages; shown as "edited" on both devices, delivered later if they're offline |
+| ✅ | **Profile photo privacy** | "Everyone" or "My contacts only" (people you saved yourself, not just people who messaged you) |
+| ✅ | **Background notifications** | A notification and an unread count in the tab title when a message arrives while NodeX is open but not in front; raised by your own device, no push server |
+| ✅ | **Block a user** | Your device refuses a blocked person's connections, messages, file and photo requests; they aren't told, and you can unblock at any time |
 | ✅ | **Emoji picker** | Built-in picker (no external service); emoji-only messages are shown large |
 | ✅ | **Ticks and read receipts** | 🕓 waiting · ✓ delivered (recipient's device confirmed) · ✓✓ read (recipient opened the chat); unread counts in the chat list |
 | ✅ | **Disappearing messages** | Each message is deleted from both devices 48 hours after it's read; unread messages are kept |
@@ -146,6 +151,16 @@ Asha's browser ──WebRTC (direct, encrypted)──► Bob's browser
     - A device accepts a deletion only for messages written by the person asking, so nobody can delete someone else's messages.
 13. **Last seen:** your device notes the time whenever it is connected to a contact, and shows it when they're no longer connected. It is stored only on your device; no server tracks who is online.
 
+14. **Notifications:** when a message arrives over the peer-to-peer connection while NodeX is hidden or not focused, your device shows a browser notification (sender's handle and a short preview) and puts the unread count in the tab title. Clicking it opens that chat. You turn it on or off from the menu. There is no push server, so nothing can be notified while NodeX is fully closed.
+15. **Block:**
+    - The block list is stored only on your device, with your contacts.
+    - Your device's connection gater refuses connections from, and to, a blocked person, and the chat, file and photo protocols reject their requests.
+    - To them you simply look offline: their messages stay on their device as undelivered (🕓). They aren't told.
+    - Unblocking lets their waiting messages through.
+
+16. **Typing indicator:** while you type, your app sends `{ t: "typing" }` at most every 3 seconds, and only if a connection to that person is already open. Their app shows "typing…" for 5 seconds after the last signal, or until your message arrives. Nothing is stored or queued.
+17. **Edit:** your device changes its copy and sends `{ t: "edit", items: [{ id, text, at }] }`. The other device accepts an edit only for messages written by the sender, never for deleted ones, and never lets an older edit replace a newer one. If they're offline, the edit waits on your device like a message. A message that hasn't left your device yet is simply changed.
+
 > **Both people need the app open at the same time** for a message to move. A video or document can only be downloaded while the sender is online. There's no server to hold messages for offline users.
 
 ### Profile photos (peer to peer)
@@ -157,7 +172,10 @@ Asha's browser ──WebRTC (direct, encrypted)──► Bob's browser
   - the file contents must really be that image type
   - the SHA-256 hash must match
   - unasked-for photo pushes are accepted only from contacts
-- **Who can see it:** anyone who finds you can see your photo, like WhatsApp's "Everyone" setting.
+- **Who can see it:** you choose in your profile.
+  - **Everyone:** anyone who finds or chats with you.
+  - **My contacts only:** only people you saved yourself. Someone who just messaged you (added to your chats automatically) isn't included until you tap **Add to contacts**. Everyone else is answered "no photo", and when you switch, people connected at that moment are updated straight away.
+
 
 ### Sign up
 
@@ -390,6 +408,8 @@ NodeX/
         ├── p2p/node.ts            Browser libp2p node: join, publish, look up, WebRTC
         ├── p2p/chat.ts            P2P chat protocol: send, receive, acks, offline queue
         ├── p2p/file-transfer.ts   P2P video/document transfer: chunks, resume, verification
+        ├── p2p/blocklist.ts       Blocked people, enforced on this device
+        ├── notifications.ts       Background notifications (browser Notification API)
         ├── messages.ts            Local message storage (IndexedDB)
         ├── p2p/record.ts          Create/validate handle records (mirrors record.go)
         ├── identity.ts            Keys, recovery phrase, handle derivation
@@ -424,6 +444,8 @@ cd ../NodeX-node && go test ./...
     - A stranger who claims to be someone else is rejected.
   - **Videos and documents:** a 200 KB document downloads automatically and arrives byte-for-byte identical; a video plays in the chat; a 20 MB file waits for a tap, shows progress, and completes identical after cancel and resume; a file over 50 MB is refused; a stranger asking for someone else's file is refused; zero HTTP requests.
   - **Reply, forward, delete, last seen (three browsers):** quotes show the right author and jump to the original; forwarded text and a forwarded document reach a third person (document byte-for-byte identical); delete for me keeps the other person's copy; delete for everyone removes the text from both devices, also when the other person was offline at the time; last seen appears when they disconnect and is remembered; zero HTTP requests.
+  - **Notifications and blocking:** a notification only while NodeX is in the background, clicking it opens the chat, unread count in the tab title; a blocked person's messages stay undelivered and never reach the blocker, also after a restart; unblocking lets them through.
+  - **Typing, edit, photo privacy:** "typing…" appears and clears; edits arrive marked "edited", also when made while the other person was offline; nobody can edit someone else's message; with "My contacts only", a stranger who finds or messages you gets no photo until you add them; zero HTTP requests.
 
 ---
 
@@ -436,6 +458,9 @@ cd ../NodeX-node && go test ./...
 - **Disappearing messages rely on each device's NodeX app.** In a decentralized app nobody can force-delete data on someone else's device: each NodeX app deletes its own copy after 48 hours, but a modified app, a screenshot or a copy-paste can keep a message. The same is true of disappearing messages in any messenger.
 - **"Delete for everyone" relies on the other device's NodeX app too**, for the same reason. A reply's quote keeps its short copy of the original even if the original is later deleted.
 - **"Last seen" is what your own device observed:** the last time it was connected to that person. They may have been online since then without connecting to you.
+- **Edits rely on the other device's NodeX app**, like disappearing and deleted messages. A reply's quote keeps the text from before an edit.
+- **Notifications need NodeX open.** A tab in the background or a minimised window still notifies; a closed browser can't, because there is no server to push from.
+- **Blocking is enforced by your device.** A blocked person can still look up your handle in the public DHT, and keeps messages and the profile photo they already received. Removing a blocked contact also removes the block.
 - **Chat needs both people online.** Without a server, nothing can hold a message for someone who's offline. Messages wait on the sender's device until both are online together.
 - **Across different home networks, browsers may need STUN** (`NEXT_PUBLIC_STUN_SERVERS`) to find a direct path. If none is found, chat still works through a NodeX node's relay (encrypted end to end), but relayed connections are time- and size-limited, so the app reconnects as needed.
 - **Running more nodes makes the network more resilient.** With a single node, search depends on that node being up. Independently run nodes linked with `NODE_PEERS` share the DHT.
@@ -458,10 +483,12 @@ cd ../NodeX-node && go test ./...
 - [x] Emoji picker and photo messages
 - [x] Video and document messages (up to 50 MB, with resume)
 - [x] Reply, forward, delete for me / for everyone, last seen
-- [ ] Group chats
+- [x] Background notifications and blocking
+- [x] Typing indicator, edit messages, "My contacts only" photo
 - [x] Read receipts (✓✓) and disappearing messages (48 h after reading)
-- [ ] Typing indicators
-- [ ] Link a new device by QR code
+- [ ] Group chats
+- [ ] Voice messages, voice and video calls
+- [ ] Use one account on several devices
 
 ---
 
